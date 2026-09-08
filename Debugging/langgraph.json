@@ -1,0 +1,7 @@
+{
+    "dependencies": [".."],
+    "graphs": {
+      "rag_cot_agent": "../src/workflow.py:graph"
+    },
+    "env": "../.env"
+  }
