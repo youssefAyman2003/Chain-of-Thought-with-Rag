@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CoT-RAG — Chain-of-Thought Reasoning</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0D1117;
+      --surface:   #161B22;
+      --border:    #21262D;
+      --border-hi: #30363D;
+      --blue:      #3bf673;
+      --blue-dim:  #1D4ED8;
+      --blue-glow: rgba(59,130,246,0.15);
+      --green:     #22C55E;
+      --amber:     #F59E0B;
+      --text:      #E6EDF3;
+      --text-muted:#8B949E;
+      --text-dim:  #484F58;
+      --mono:      'JetBrains Mono', monospace;
+      --sans:      'Inter', sans-serif;
+      --radius:    8px;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    /* ── Layout ────────────────────────────────────────── */
+    .shell {
+      display: grid;
+      grid-template-rows: 56px 1fr;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Header ────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .logo-mark {
+      width: 28px; height: 28px;
+      background: var(--blue);
+      border-radius: 6px;
+      display: grid; place-items: center;
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 500;
+      color: #fff;
+      flex-shrink: 0;
+    }
+
+    header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -.02em;
+    }
+    header span {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-family: var(--mono);
+    }
+
+    .status-pill {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: var(--mono);
+    }
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    .status-dot.idle  { background: var(--text-dim); }
+    .status-dot.busy  { background: var(--amber); animation: pulse 1s ease-in-out infinite; }
+    .status-dot.error { background: #EF4444; }
+
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: .35; }
+    }
+
+    /* ── Main split ────────────────────────────────────── */
+    main {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      overflow: hidden;
+    }
+
+    /* ── Left panel ────────────────────────────────────── */
+    .panel-left {
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .panel-label {
+      padding: 14px 20px 10px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-dim);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      font-family: var(--mono);
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* Question input */
+    .question-area {
+      padding: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .question-area label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border-hi);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.6;
+      padding: 12px 14px;
+      resize: none;
+      height: 110px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    textarea:focus { border-color: var(--blue); }
+    textarea::placeholder { color: var(--text-dim); }
+
+    .ask-btn {
+      margin-top: 12px;
+      width: 100%;
+      background: var(--blue);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-family: var(--sans);
+      font-size: 14px;
+      font-weight: 500;
+      padding: 10px 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: background .15s, opacity .15s;
+    }
+    .ask-btn:hover:not(:disabled) { background: var(--blue-dim); }
+    .ask-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    .ask-btn svg { width: 16px; height: 16px; }
+
+    /* Reasoning chain */
+    .chain-section {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+    }
+
+    .chain-title {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+
+    .chain-empty {
+      color: var(--text-dim);
+      font-size: 13px;
+      font-family: var(--mono);
+      padding: 8px 0;
+    }
+
+    .step-list { display: flex; flex-direction: column; gap: 0; }
+
+    .step-item {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+      opacity: 0;
+      transform: translateY(6px);
+      animation: stepIn .3s ease forwards;
+    }
+
+    @keyframes stepIn {
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .step-connector {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .step-node {
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      background: var(--blue-glow);
+      border: 1px solid var(--blue);
+      display: grid; place-items: center;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--blue);
+      font-weight: 500;
+    }
+
+    .step-line {
+      width: 1px;
+      flex: 1;
+      min-height: 20px;
+      background: var(--border-hi);
+      margin: 4px 0;
+    }
+
+    .step-content { padding-bottom: 20px; flex: 1; }
+    .step-text {
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--text);
+    }
+
+    /* Sources accordion */
+    .sources-section {
+      border-top: 1px solid var(--border);
+      padding: 16px 20px;
+    }
+
+    .sources-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text-muted);
+      user-select: none;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-family: var(--sans);
+      padding: 0;
+    }
+
+    .sources-toggle:hover { color: var(--text); }
+
+    .sources-toggle svg {
+      width: 14px; height: 14px;
+      transition: transform .2s;
+    }
+    .sources-toggle.open svg { transform: rotate(90deg); }
+
+    .source-count {
+      margin-left: auto;
+      background: var(--border);
+      border-radius: 10px;
+      padding: 1px 7px;
+      font-size: 11px;
+      font-family: var(--mono);
+    }
+
+    .sources-list {
+      display: none;
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height .25s ease;
+    }
+    .sources-list.open { max-height: 400px; }
+
+    .source-chip {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* ── Right panel ───────────────────────────────────── */
+    .panel-right {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .answer-header {
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .answer-header .panel-label { padding: 0; border: none; }
+
+    .copy-btn {
+      margin-left: auto;
+      background: none;
+      border: 1px solid var(--border-hi);
+      border-radius: 6px;
+      color: var(--text-muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 4px 10px;
+      cursor: pointer;
+      display: flex; align-items: center; gap: 5px;
+      transition: color .15s, border-color .15s;
+    }
+    .copy-btn:hover { color: var(--text); border-color: var(--blue); }
+    .copy-btn svg { width: 12px; height: 12px; }
+
+    .answer-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 28px 32px;
+    }
+
+    .answer-placeholder {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: var(--text-dim);
+      text-align: center;
+    }
+
+    .placeholder-icon {
+      width: 48px; height: 48px;
+      border: 1px solid var(--border-hi);
+      border-radius: 12px;
+      display: grid; place-items: center;
+      opacity: .5;
+    }
+    .placeholder-icon svg { width: 24px; height: 24px; }
+
+    .answer-placeholder p {
+      font-size: 13px;
+      font-family: var(--mono);
+      max-width: 28ch;
+    }
+
+    .answer-text {
+      font-size: 15px;
+      line-height: 1.75;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-width: 72ch;
+    }
+
+    .answer-question {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* Skeleton loader */
+    .skeleton {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-width: 72ch;
+    }
+    .skel-line {
+      height: 14px;
+      border-radius: 4px;
+      background: linear-gradient(90deg, var(--surface) 25%, var(--border) 50%, var(--surface) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s infinite;
+    }
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* Error state */
+    .error-banner {
+      background: rgba(239,68,68,.1);
+      border: 1px solid rgba(239,68,68,.3);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      color: #FCA5A5;
+      font-size: 13px;
+      font-family: var(--mono);
+      max-width: 72ch;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+
+    /* Responsive */
+    @media (max-width: 720px) {
+      main { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      .panel-left { border-right: none; border-bottom: 1px solid var(--border); max-height: 60vh; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Header -->
+  <header>
+    <div class="logo-mark">∇</div>
+    <h1>CoT-RAG</h1>
+    <span>chain-of-thought reasoning</span>
+    <div class="status-pill">
+      <div class="status-dot idle" id="statusDot"></div>
+      <span id="statusText">idle</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Left: Input + Reasoning Steps -->
+    <div class="panel-left">
+      <div class="panel-label">Query</div>
+
+      <div class="question-area">
+        <label for="questionInput">Ask a question</label>
+        <textarea
+          id="questionInput"
+          placeholder="e.g. What are the prerequisites for 6.006 and how does dynamic programming fit into the curriculum?"
+          spellcheck="false"
+        ></textarea>
+        <button class="ask-btn" id="askBtn" onclick="submitQuestion()">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M2 8h12M10 4l4 4-4 4"/>
+          </svg>
+          Run reasoning
+        </button>
+      </div>
+
+      <div class="chain-section">
+        <div class="chain-title">Reasoning steps</div>
+        <div id="stepList">
+          <p class="chain-empty">Steps will appear here after you ask a question.</p>
+        </div>
+      </div>
+
+      <div class="sources-section" id="sourcesSection" style="display:none">
+        <button class="sources-toggle" id="sourcesToggle" onclick="toggleSources()">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M6 4l4 4-4 4"/>
+          </svg>
+          Sources retrieved
+          <span class="source-count" id="sourceCount">0</span>
+        </button>
+        <div class="sources-list" id="sourcesList"></div>
+      </div>
+    </div>
+
+    <!-- Right: Answer -->
+    <div class="panel-right">
+      <div class="answer-header">
+        <div class="panel-label">Answer</div>
+        <button class="copy-btn" id="copyBtn" onclick="copyAnswer()" style="display:none">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="5" y="5" width="9" height="9" rx="1"/>
+            <path d="M11 5V3a1 1 0 00-1-1H3a1 1 0 00-1 1v7a1 1 0 001 1h2"/>
+          </svg>
+          Copy
+        </button>
+      </div>
+
+      <div class="answer-body" id="answerBody">
+        <div class="answer-placeholder" id="answerPlaceholder">
+          <div class="placeholder-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 8v4M12 16h.01"/>
+            </svg>
+          </div>
+          <p>Your synthesized answer will appear here</p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+  const API_BASE = '';  // same origin; change to http://localhost:8000 for dev
+
+  let currentAnswer = '';
+  let sourcesOpen = false;
+
+  function setStatus(state) {
+    const dot = document.getElementById('statusDot');
+    const txt = document.getElementById('statusText');
+    dot.className = 'status-dot ' + state;
+    txt.textContent = state;
+  }
+
+  async function submitQuestion() {
+    const question = document.getElementById('questionInput').value.trim();
+    if (!question) return;
+
+    const btn = document.getElementById('askBtn');
+    btn.disabled = true;
+    setStatus('busy');
+
+    // Reset UI
+    document.getElementById('stepList').innerHTML = '';
+    document.getElementById('sourcesSection').style.display = 'none';
+    document.getElementById('copyBtn').style.display = 'none';
+    document.getElementById('answerBody').innerHTML = renderSkeleton();
+    document.getElementById('answerPlaceholder') && null;
+    currentAnswer = '';
+    sourcesOpen = false;
+
+    try {
+      const res = await fetch(`${API_BASE}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || 'Request failed');
+      }
+
+      const data = await res.json();
+
+      // Render reasoning steps with stagger
+      renderSteps(data.sub_steps || []);
+
+      // Render answer
+      currentAnswer = data.answer || '';
+      renderAnswer(question, currentAnswer);
+
+      // Render sources
+      if (data.sources && data.sources.length) {
+        renderSources(data.sources);
+      }
+
+      setStatus('ready');
+
+    } catch (err) {
+      renderError(err.message);
+      setStatus('error');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function renderSteps(steps) {
+    const list = document.getElementById('stepList');
+    if (!steps.length) {
+      list.innerHTML = '<p class="chain-empty">No steps returned.</p>';
+      return;
+    }
+
+    list.innerHTML = '<div class="step-list" id="stepListInner"></div>';
+    const inner = document.getElementById('stepListInner');
+
+    steps.forEach((text, i) => {
+      const isLast = i === steps.length - 1;
+      const el = document.createElement('div');
+      el.className = 'step-item';
+      el.style.animationDelay = `${i * 80}ms`;
+      el.innerHTML = `
+        <div class="step-connector">
+          <div class="step-node">${i + 1}</div>
+          ${!isLast ? '<div class="step-line"></div>' : ''}
+        </div>
+        <div class="step-content">
+          <div class="step-text">${escHtml(text)}</div>
+        </div>
+      `;
+      inner.appendChild(el);
+    });
+  }
+
+  function renderAnswer(question, answer) {
+    const body = document.getElementById('answerBody');
+    body.innerHTML = `
+      <div class="answer-question">Q: ${escHtml(question)}</div>
+      <div class="answer-text">${escHtml(answer)}</div>
+    `;
+    document.getElementById('copyBtn').style.display = 'flex';
+  }
+
+  function renderSources(sources) {
+    const section = document.getElementById('sourcesSection');
+    const list = document.getElementById('sourcesList');
+    const count = document.getElementById('sourceCount');
+
+    section.style.display = 'block';
+    count.textContent = sources.length;
+    list.innerHTML = sources.map(s =>
+      `<div class="source-chip">${escHtml(s.slice(0, 280))}${s.length > 280 ? '…' : ''}</div>`
+    ).join('');
+  }
+
+  function renderSkeleton() {
+    const widths = [92, 78, 85, 60, 88, 45];
+    return `<div class="skeleton">${widths.map(w =>
+      `<div class="skel-line" style="width:${w}%"></div>`
+    ).join('')}</div>`;
+  }
+
+  function renderError(msg) {
+    document.getElementById('answerBody').innerHTML =
+      `<div class="error-banner">Error: ${escHtml(msg)}</div>`;
+    document.getElementById('stepList').innerHTML =
+      '<p class="chain-empty">—</p>';
+  }
+
+  function toggleSources() {
+    sourcesOpen = !sourcesOpen;
+    const list = document.getElementById('sourcesList');
+    const btn = document.getElementById('sourcesToggle');
+    list.classList.toggle('open', sourcesOpen);
+    btn.classList.toggle('open', sourcesOpen);
+  }
+
+  async function copyAnswer() {
+    if (!currentAnswer) return;
+    await navigator.clipboard.writeText(currentAnswer).catch(() => {});
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => {
+      btn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="5" width="9" height="9" rx="1"/><path d="M11 5V3a1 1 0 00-1-1H3a1 1 0 00-1 1v7a1 1 0 001 1h2"/></svg>Copy`;
+    }, 1500);
+  }
+
+  // Enter to submit (Shift+Enter for newline)
+  document.getElementById('questionInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submitQuestion();
+    }
+  });
+
+  function escHtml(str) {
+    return String(str)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>
